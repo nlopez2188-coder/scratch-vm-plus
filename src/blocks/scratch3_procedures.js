@@ -15,6 +15,7 @@ class Scratch3ProcedureBlocks {
         return {
             procedures_definition: this.definition,
             procedures_call: this.call,
+            procedures_return: this.return, // Add this line
             argument_reporter_string_number: this.argumentReporterStringNumber,
             argument_reporter_boolean: this.argumentReporterBoolean
         };
@@ -54,6 +55,21 @@ class Scratch3ProcedureBlocks {
             util.startProcedure(procedureCode);
         }
     }
+
+        return (args, util) => {
+        const value = args.VALUE;
+        // Search up the stack to find the procedure call frame
+        let frame = util.stackFrame;
+        while (frame) {
+            if (frame.isProcedure) {
+                frame.returnValue = value;
+                break;
+            }
+            frame = frame.parent;
+        }
+        util.stopThisStackTrace();
+    }
+
 
     argumentReporterStringNumber (args, util) {
         const value = util.getParam(args.VALUE);
