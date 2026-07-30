@@ -86,7 +86,12 @@ const ArgumentType = {
     /**
      * Name of extendable field
     */
-    EXTENDABLE: 'extendable'
+    EXTENDABLE: 'extendable',
+
+    /**
+     * Name of extendable branch field
+     */
+    EXTENDABLE_BRANCH: 'EXTENDABLE_BRANCH'
 };
 
 module.exports = ArgumentType;
