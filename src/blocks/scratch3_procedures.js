@@ -25,8 +25,46 @@ class Scratch3ProcedureBlocks {
         };
     }
 
-    definition () {
-        // No-op: execute the blocks.
+    definition (args, util) {
+        const stackFrame = util.stackFrame;
+        const procedureCode = args.mutation.proccode;
+        const isGlobal = args.mutation && (args.mutation.global === true || args.mutation.global === 'true');
+
+        if (stackFrame.executed) {
+            return;
+        }
+
+        const paramNamesIdsAndDefaults = util.getProcedureParamNamesIdsAndDefaults(procedureCode, isGlobal);
+        if (paramNamesIdsAndDefaults === null) {
+            stackFrame.executed = true;
+            return;
+        }
+
+        const [paramNames, paramIds] = paramNamesIdsAndDefaults;
+        const callerBlockContainer = util.thread.blockContainer || util.target.blocks;
+        const currentBlock = callerBlockContainer.getBlock(util.thread.peekStack());
+
+        if (currentBlock && currentBlock.inputs) {
+            let branchIndex = 0;
+            const branchParamMap = {};
+            for (let i = 0; i < paramIds.length; i++) {
+                if (paramIds[i].startsWith('SUBSTACK')) {
+                    const input = currentBlock.inputs[paramIds[i]];
+                    const branchBlockId = (input && input.block) ? input.block : null;
+                    util.pushParam(`__branch_${branchIndex}`, branchBlockId);
+                    branchParamMap[paramNames[i]] = branchIndex;
+                    branchIndex++;
+                }
+            }
+            if (branchIndex > 0) {
+                util.pushParam('__branchCount', branchIndex);
+                util.pushParam('__branchParamMap', branchParamMap);
+                util.pushParam('__callerBlockContainer', callerBlockContainer);
+                util.pushParam('__definitionBlockContainer', util.thread.blockContainer);
+            }
+        }
+
+        stackFrame.executed = true;
     }
 
     call (args, util) {
@@ -75,28 +113,143 @@ class Scratch3ProcedureBlocks {
             }
         }
 
-        const callerBlockContainer = util.thread.blockContainer || util.target.blocks;
-        const currentBlock = callerBlockContainer.getBlock(util.thread.peekStack());
-        if (currentBlock && currentBlock.inputs) {
-            let branchIndex = 0;
-            const branchParamMap = {};
-            for (let i = 0; i < paramIds.length; i++) {
-                if (paramIds[i].startsWith('SUBSTACK')) {
-                    const input = currentBlock.inputs[paramIds[i]];
-                    const branchBlockId = (input && input.block) ? input.block : null;
-                    util.pushParam(`__branch_${branchIndex}`, branchBlockId);
-                    branchParamMap[paramNames[i]] = branchIndex;
-                    branchIndex++;
-                }
+        const addonBlock = util.runtime.getAddonBlock(procedureCode);
+        if (addonBlock) {
+            const result = addonBlock.callback(util.thread.getAllparams(), util);
+            if (util.thread.status === 1 /* STATUS_PROMISE_WAIT */) {
+                // If the addon block is using STATUS_PROMISE_WAIT to force us to sleep,
+                // make sure to not re-run this block when we resume.
+                stackFrame.executed = true;
             }
-            if (branchIndex > 0) {
-                util.pushParam('__branchCount', branchIndex);
-                util.pushParam('__branchParamMap', branchParamMap);
-                util.pushParam('__callerBlockContainer', callerBlockContainer);
-                util.pushParam('__definitionBlockContainer', util.thread.blockContainer);
-            }
+            return result;
         }
 
+        stackFrame.executed = true;
+
+        if (isReporter) {
+            util.thread.peekStackFrame().waitingReporter = true;
+            // Default return value
+            stackFrame.returnValue = '';
+        }
+
+        util.startProcedure(procedureCode, isGlobal);
+    }
+
+    return (args, util) {
+        util.stopThisScript();
+        // If used outside of a custom block, there may be no stackframe.
+        if (util.thread.peekStackFrame()) {
+            util.stackFrame.returnValue = args.VALUE;
+        }
+    }
+
+    setParam (args, util) {
+        const activeStackFrame = util.thread.stackFrames[0];
+        if (!activeStackFrame || !activeStackFrame.params) return;
+
+        const currentBlock = util.target.blocks.getBlock(util.thread.peekStack());
+        const paramInput = currentBlock && currentBlock.inputs && currentBlock.inputs.PARAM;
+        if (!paramInput || !paramInput.block) return;
+
+        const paramReporterBlock = util.target.blocks.getBlock(paramInput.block);
+        if (!paramReporterBlock) return;
+
+        // Only allow argument reporter blocks
+        const opcode = paramReporterBlock.opcode;
+        const allowedOpcode = (
+            opcode === 'argument_reporter_string_number' ||
+            opcode === 'argument_reporter_boolean' ||
+            opcode === 'argument_reporter_array' ||
+            opcode === 'argument_reporter_object'
+        );
+        if (!allowedOpcode) return;
+
+        const paramFieldValue = paramReporterBlock.fields && paramReporterBlock.fields.VALUE;
+        const paramName = paramFieldValue && paramFieldValue.value;
+        if (typeof paramName === 'undefined') return;
+
+        activeStackFrame.params[paramName] = args.VALUE;
+    }
+
+    argumentReporterStringNumber (args, util) {
+        const value = util.getParam(args.VALUE);
+        if (value === null) {
+            // tw: support legacy block
+            if (String(args.VALUE).toLowerCase() === 'last key pressed') {
+                return util.ioQuery('keyboard', 'getLastKeyPressed');
+            }
+            // When the parameter is not found in the most recent procedure
+            // call, the default is always 0.
+            return 0;
+        }
+        return value;
+    }
+
+    argumentReporterBoolean (args, util) {
+        const value = util.getParam(args.VALUE);
+        if (value === null) {
+            // tw: implement is compiled? and is turbowarp?
+            const lowercaseValue = String(args.VALUE).toLowerCase();
+            if (util.target.runtime.compilerOptions.enabled && lowercaseValue === 'is compiled?') {
+                return true;
+            }
+            if (lowercaseValue === 'is nitrobolt?') {
+                return true;
+            }
+            // When the parameter is not found in the most recent procedure
+            // call, the default is always 0.
+            return 0;
+        }
+        return value;
+    }
+
+    argumentReporterObject (args, util) {
+        const value = util.getParam(args.VALUE);
+        if (value === null) {
+            return 0;
+        }
+        return value;
+    }
+
+    argumentReporterArray (args, util) {
+        const value = util.getParam(args.VALUE);
+        if (value === null) {
+            return 0;
+        }
+        return value;
+    }
+
+    argumentReporterStatement (args, util) {
+        const currentBlockId = util.thread.peekStack();
+        const currentBlock = util.thread.blockContainer.getBlock(currentBlockId);
+        if (!currentBlock) return;
+
+        const paramName = currentBlock.fields && currentBlock.fields.VALUE &&
+            currentBlock.fields.VALUE.value;
+        if (typeof paramName === 'undefined') return;
+
+        const branchParamMap = util.getParam('__branchParamMap');
+        if (!branchParamMap) return;
+
+        const branchIndex = branchParamMap[paramName];
+        if (typeof branchIndex === 'undefined') return;
+
+        const branchBlockId = util.getParam(`__branch_${branchIndex}`);
+        if (branchBlockId === null) return;
+
+        const definitionBlockContainer = util.thread.blockContainer;
+
+        const callerBlocks = util.getParam('__callerBlockContainer');
+        if (callerBlocks) {
+            util.thread.blockContainer = callerBlocks;
+        }
+
+        util.thread.pushStack(branchBlockId);
+        util.thread.peekStackFrame().returnToBlockContainer = definitionBlockContainer;
+    }
+}
+
+module.exports = Scratch3ProcedureBlocks;
         const addonBlock = util.runtime.getAddonBlock(procedureCode);
         if (addonBlock) {
             const result = addonBlock.callback(util.thread.getAllparams(), util);
