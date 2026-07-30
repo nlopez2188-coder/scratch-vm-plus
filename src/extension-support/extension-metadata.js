@@ -6,6 +6,7 @@
  * @property {string} [blockIconURI] - URI for an image to be placed on each block in this extension. Data URI ok.
  * @property {string} [menuIconURI] - URI for an image to be placed on this extension's category menu item. Data URI ok.
  * @property {string} [docsURI] - link to documentation content for this extension.
+ * @property {string} [appendTo] - the ID of an existing category to append this extension's blocks to.
  * @property {Array.<ExtensionBlockMetadata|string>} blocks - the blocks provided by this extension, plus separators.
  * @property {Object.<ExtensionMenuMetadata>} [menus] - map of menu name to metadata for each of this extension's menus.
  */
